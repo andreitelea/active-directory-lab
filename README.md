@@ -68,16 +68,16 @@ Each attack topic is paired with **what the defender sees in the logs** and
 
 ## Documentation
 
-The full step-by-step write-up (in Italian) lives in [`docs/`](docs/):
+The full step-by-step write-up lives in [`docs/`](docs/):
 
-1. [Panoramica e scenario](docs/01-panoramica-scenario.md)
-2. [Architettura del lab](docs/02-architettura-lab.md)
-3. [Costruzione del Domain Controller](docs/03-domain-controller.md)
-4. [Popolamento del dominio](docs/04-popolamento-dominio.md)
-5. Simulazione delle tecniche di attacco *(in corso)*
-6. Hardening e difesa *(in corso)*
-7. [Detection e logging](docs/07-detection-logging.md)
-8. Lezioni imparate *(in corso)*
+1. [Overview & scenario](docs/01-overview-and-scenario.md)
+2. [Lab architecture](docs/02-lab-architecture.md)
+3. [Domain Controller build](docs/03-domain-controller.md)
+4. [Domain structure & accounts](docs/04-domain-structure.md)
+5. Attack techniques simulation *(in progress)*
+6. Hardening *(in progress)*
+7. [Detection & logging](docs/07-detection-logging.md)
+8. Lessons learned *(in progress)*
 
 ---
 
