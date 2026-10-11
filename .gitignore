@@ -1,19 +1,19 @@
-# Sistemi operativi
+# Operating systems
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Editor
+# Editors
 .vscode/
 *.swp
 *~
 
-# Mai versionare file di macchine virtuali o dischi (vanno su un disco locale, non su Git)
+# Never version virtual machine or disk images (they belong on a local disk, not in Git)
 *.vhd
 *.vhdx
 *.iso
 *.avhdx
 
-# File temporanei
+# Temporary files
 *.tmp
 *.log
