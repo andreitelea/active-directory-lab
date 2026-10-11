@@ -24,6 +24,8 @@ Internet access (needed occasionally, mainly to update Kali's tooling) is grante
 by *temporarily* attaching an External switch, then removing it to return the
 lab to isolation.
 
+![Hyper-V Virtual Switch Manager showing the private switch Lab-Clinica-Private](../images/02-01-virtual-switch.png)
+
 ## Hosts
 
 | Host | OS | IP | DNS | Role |
@@ -43,6 +45,11 @@ graph TD
     KA -.->|"internal threat"| DC
     KA -.->|"internal threat"| CL
 ```
+
+Each host is configured with a static address and points its DNS at the Domain
+Controller. The output below confirms DC01's configuration:
+
+![DC01 ipconfig /all showing static IP 10.10.10.10 and DNS pointing to itself](../images/02-02-dc01-ipconfig.png)
 
 ## Key design decisions
 
@@ -77,8 +84,3 @@ after destructive tests.
 > password, rotated automatically). Restoring only one of them breaks that
 > secret and produces the error *"The trust relationship between this
 > workstation and the primary domain failed."*
-
----
-
-*Screenshots to add: the Virtual Switch Manager showing `Lab-Clinica-Private`,
-and `ipconfig /all` / `ip a` from each host confirming its address.*
