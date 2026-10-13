@@ -58,8 +58,8 @@ Host: Intel i7-12700K, 32 GB RAM, Windows 11 Pro + Hyper-V.
 - [x] Domain-joined client and verified domain logon
 - [x] Security logging baseline: advanced audit policy via GPO
 - [x] Attack techniques simulation (reconnaissance, credential attacks, lateral movement, escalation)
-- [ ] Hardening
-- [ ] Detection & monitoring
+- [x] Hardening
+- [x] Detection & monitoring
 
 Each attack topic is paired with **what the defender sees in the logs** and
 **how to reduce the risk**.
@@ -75,9 +75,9 @@ The full step-by-step write-up lives in [`docs/`](docs/):
 3. [Domain Controller build](docs/03-domain-controller.md)
 4. [Domain structure & accounts](docs/04-domain-structure.md)
 5. [Attack techniques simulation](docs/05-attack-techniques.md)
-6. Hardening *(in progress)*
-7. Detection & logging *(in progress)*
-8. Lessons learned *(in progress)*
+6. [Hardening](docs/06-hardening.md)
+7. [Detection & logging](docs/07-detection-logging.md)
+8. [Lessons learned](docs/08-lessons-learned.md)
 
 ---
 
