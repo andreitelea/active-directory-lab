@@ -73,7 +73,7 @@ The full step-by-step write-up lives in [`docs/`](docs/):
 1. [Overview & scenario](docs/01-overview-and-scenario.md)
 2. [Lab architecture](docs/02-lab-architecture.md)
 3. [Domain Controller build](docs/03-domain-controller.md)
-4. Domain structure & accounts *(in progress)*
+4. [Domain structure & accounts](docs/04-domain-structure.md)
 5. Attack techniques simulation *(in progress)*
 6. Hardening *(in progress)*
 7. Detection & logging *(in progress)*
