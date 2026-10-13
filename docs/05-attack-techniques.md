@@ -355,3 +355,134 @@ One row tells the whole story: **`luca.moretti`** requested a ticket for
   service accounts largely neutralizes the attack.
 - Detect Kerberoasting through **4769 events requesting RC4 tickets**, and limit
   the blast radius by keeping service accounts out of privileged groups.
+
+---
+
+## 5.3 Lateral movement
+
+Armed with several credentials but no privileges, the attacker now tries to
+**move between machines**, looking for one where a credential is worth more — a
+stepping stone toward the Domain Controller.
+
+### Mapping access
+
+netexec reports `(Pwn3d!)` when a credential has **local administrator** rights
+on a target (enough to execute code). Testing the service account against both
+hosts establishes the baseline:
+
+```bash
+nxc smb 10.10.10.10 10.10.10.20 -u svc-gestionale -p '<password>'
+```
+
+Every host returns `[+]` (the credential is valid domain-wide) but **no
+`(Pwn3d!)`** — the account is administrator nowhere. Least privilege holds: the
+stolen keys open no safes yet.
+
+> **Lab note.** To reproduce a very common real-world misconfiguration, the
+> service account was then added to the **local Administrators** group of
+> CLIENT01 — exactly what happens when an application's service account is made
+> a local admin on the machine that runs the application.
+
+### A firewall that blocks lateral movement
+
+The first attempt to reach CLIENT01 over SMB returned nothing at all: by
+default, the **Windows 11 host firewall blocks inbound SMB (445)**. Unlike a
+server, a workstation does not accept SMB connections out of the box — a real
+control that frustrates lateral movement. Enterprises frequently disable it to
+allow remote management (help desk, SCCM, etc.), typically via GPO; to simulate
+a managed environment, inbound File and Printer Sharing was enabled on CLIENT01:
+
+```powershell
+Enable-NetFirewallRule -DisplayGroup "File and Printer Sharing"
+```
+
+With the port open, the same scan now shows the compromise — the service
+account is admin on CLIENT01, but still not on the DC:
+
+![svc-gestionale is Pwn3d on CLIENT01 but not on DC01](../images/05-13-lateral-pwned.png)
+
+### Remote code execution
+
+Administrator access means code execution. netexec runs a command remotely:
+
+```bash
+nxc smb 10.10.10.20 -u svc-gestionale -p '<password>' -x 'whoami'
+```
+
+![Remote execution falling back to atexec, running as nt authority\system](../images/05-14-remote-exec.png)
+
+Two things stand out. netexec first tried **WMI** and failed (that method needs
+RPC ports the firewall still blocks), then automatically fell back to **atexec**
+(execution through the Task Scheduler over SMB) — an attacker adapts to the
+controls in place. And the command returned **`nt authority\system`**: the
+service that runs the command executes as **SYSTEM**, the most powerful account
+on the machine. The attacker now fully owns CLIENT01.
+
+### Harvesting credentials
+
+The real prize of lateral movement is more credentials. As SYSTEM, the attacker
+reads the local password store (the **SAM**):
+
+```bash
+nxc smb 10.10.10.20 -u svc-gestionale -p '<password>' --sam
+```
+
+![SAM dump of CLIENT01 showing local account hashes](../images/05-15-sam-dump.png)
+
+The dump returns the local accounts' password hashes. Most are the well-known
+empty-password hash `31d6cfe0d16ae931b73c59d7e0c089c0` (the built-in
+`Administrator`, `Guest` and `DefaultAccount` are disabled/blank), but
+**`localadmin`** has a real hash. That hash enables **pass-the-hash**: in
+Windows, authentication often needs only the hash, not the cleartext password.
+If the same local administrator password is reused across machines — a very
+common practice — this single hash unlocks all of them, with no cracking
+required. One master key for every identical door.
+
+### Detection — and a workstation logging gap
+
+The attack landed on **CLIENT01**, so the traces are in its log, not the DC's.
+Checking the audit configuration there revealed a gap:
+
+```
+auditpol /get /subcategory:"Process Creation"  →  No Auditing
+```
+
+The domain audit baseline (chapter's logging theme) was linked at the domain
+level, but had **not taken effect on CLIENT01** — so the process-creation
+events (4688) that would have shown the attacker's commands were never
+recorded. **Lesson:** audit policy must be verified on every host; workstations
+are routinely under-logged compared to servers, and that is exactly where
+lateral movement lands.
+
+Default logon auditing still captured the access. On CLIENT01:
+
+```powershell
+Get-WinEvent -LogName Security -MaxEvents 1000 |
+  ?{ $_.Id -eq 4624 -and $_.Message -match '10.10.10.100' } |
+  ft TimeCreated,
+    @{n='User';e={$_.Properties[5].Value}},
+    @{n='Type';e={$_.Properties[8].Value}},
+    @{n='IP';  e={$_.Properties[18].Value}} -a
+```
+
+![CLIENT01 logon events: svc-gestionale, Type 3, from 10.10.10.100](../images/05-16-lateral-detection.png)
+
+The service account authenticates over the network (**Logon Type 3**) from
+**10.10.10.100** repeatedly — a service account connecting from a workstation IP
+it has no business using. (The `ANONYMOUS LOGON` rows from the same IP are
+netexec's null-session checks.)
+
+### Takeaways
+
+- Low-privilege credentials alone do not enable lateral movement — least
+  privilege works until a misconfiguration breaks it.
+- A **service account in a machine's local Administrators group** hands an
+  attacker full control (SYSTEM) of that machine the moment its password is
+  compromised.
+- The **workstation host firewall** blocks SMB lateral movement by default;
+  enabling broad remote management removes that protection.
+- **SAM dumping + pass-the-hash** turns one compromised machine into many when
+  local admin passwords are shared across hosts — **LAPS** (unique per-machine
+  local admin passwords) is the direct countermeasure.
+- Audit policy must be **verified on every host**: CLIENT01's missing
+  process-creation auditing left the attacker's execution invisible locally.
