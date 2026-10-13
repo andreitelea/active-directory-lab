@@ -214,3 +214,144 @@ possible. The defender does not see the *looking* — they see the *entering*.
   for free.
 - Authenticated reconnaissance is detectable through **behavioral** signals:
   anonymous network logons, and users authenticating from unexpected hosts.
+
+---
+
+## 5.2 Credential attacks
+
+Reconnaissance gave the attacker one credential (a phished reception account)
+and the full user list. The goal now is to obtain **more and better
+credentials**, moving toward the administrative account `adm.andre`.
+
+> **Lab note.** Two deliberately weak passwords were set on the domain to
+> simulate realistic poor hygiene: a seasonal password on a user account, and a
+> trivial password on a service account. Real users and administrators make
+> exactly these choices; the lab recreates the condition under controlled
+> circumstances.
+
+### Password spraying
+
+Instead of many password guesses against one account (brute force, which trips
+account lockout), spraying tries **one common password against every account**.
+Each account receives a single attempt, so lockout is avoided. Common real-world
+choices are seasonal or company-themed: `Autumn2025!`, `Welcome1`, `Company123`.
+
+Using the user list from reconnaissance:
+
+```bash
+nxc smb 10.10.10.10 -u users.txt -p 'Autunno2025!' --continue-on-success
+```
+
+- `-u users.txt` — iterate over the enumerated usernames.
+- `--continue-on-success` — keep going after a hit, to see the full picture.
+
+![Password spray: five failures and one success (luca.moretti)](../images/05-07-password-spray.png)
+
+Five accounts fail; **`luca.moretti` succeeds**. The attacker now holds a second
+credential. No `(Pwn3d!)` appears — Luca is a standard user, not a local admin
+— but every extra credential widens the attack surface.
+
+**Detection.** Spraying is noisy: each failure is a **4625** event. The
+signature is distinctive — many *different* accounts failing from one source IP
+within the same instant (brute force, by contrast, is many failures on the
+*same* account). On DC01:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625; StartTime=(Get-Date).AddMinutes(-10)} |
+  Where-Object { $_.Message -match '10\.10\.10\.100' } |
+  Select-Object TimeCreated,
+    @{N='User';      E={$_.Properties[5].Value}},
+    @{N='LogonType';  E={$_.Properties[10].Value}},
+    @{N='SourceIP';   E={$_.Properties[19].Value}} |
+  Format-Table -AutoSize
+```
+
+![Five 4625 failures, different users, same IP, same second](../images/05-08-spray-detection.png)
+
+Five failures, five different users, the same source and the same second —
+the unmistakable spray pattern. `luca.moretti` is absent because his attempt
+succeeded (logged as 4624, not 4625).
+
+### Kerberoasting
+
+Kerberoasting turns any single domain credential into a path to a **service
+account** password. Service accounts are identified by a **Service Principal
+Name (SPN)**, and Kerberos lets any authenticated user request a service ticket
+(TGS) for them. Critically, that ticket is **encrypted with the service
+account's password hash** — so the attacker can request it legitimately, take it
+offline, and brute-force the password on their own machine.
+
+The target is a service account created for the clinic's management software,
+with an SPN and (realistically) a weak password:
+
+```powershell
+New-ADUser -Name "svc-gestionale" ... -AccountPassword (... "Password1" ...) -PasswordNeverExpires $true
+Set-ADUser -Identity "svc-gestionale" -ServicePrincipalNames @{Add="HTTP/gestionale.sangiorgio.internal"}
+```
+
+An attacker first finds SPN accounts (a normal LDAP query), then requests and
+exports their tickets — here as the sprayed user `luca.moretti`, using `netexec`:
+
+```bash
+nxc ldap 10.10.10.10 -u luca.moretti -p '<password>' --kerberoasting kerb_hash.txt
+```
+
+![netexec requesting the TGS for svc-gestionale, producing a $krb5tgs$ hash](../images/05-09-kerberoast-request.png)
+
+The output is a `$krb5tgs$23$...` hash. The `23` means the ticket is encrypted
+with **RC4** — a weak, legacy cipher, and exactly what makes offline cracking
+fast. (netexec also correctly skips the disabled `krbtgt` account.)
+
+**Cracking is offline — and invisible.** The hash is cracked on the attacker's
+machine, never touching the domain again. John the Ripper on CPU (hashcat
+needs a GPU backend the VM lacks) cracks it against the `rockyou` wordlist:
+
+```bash
+john --format=krb5tgs --wordlist=/usr/share/wordlists/rockyou.txt kerb_hash.txt
+```
+
+![John the Ripper cracking the ticket to reveal Password1](../images/05-10-john-crack.png)
+
+`Password1` falls in under a second. The attacker now has the service account's
+credentials — and the defender saw nothing of the cracking. In this lab
+`svc-gestionale` is an unprivileged account, but service accounts in the real
+world are frequently over-privileged (sometimes *Domain Admin*); in that case a
+single Kerberoast equals full domain compromise.
+
+**Detection.** Requesting the ticket generated a **4769** event (Kerberos
+service ticket requested). 4769 is extremely common in normal operation; the
+tell is the **ticket encryption type**: Kerberoasting requests the weak **RC4**
+(`0x17` / decimal `23`), whereas a healthy environment uses AES (`0x12`). A
+4769 with RC4 for a user service account is the signature. On DC01:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4769; StartTime=(Get-Date).AddMinutes(-30)} |
+  Where-Object { $_.Properties[2].Value -eq 'svc-gestionale' } |
+  Select-Object TimeCreated,
+    @{N='Requester';  E={$_.Properties[0].Value}},
+    @{N='Service';    E={$_.Properties[2].Value}},
+    @{N='Encryption'; E={$_.Properties[5].Value}},
+    @{N='ClientIP';   E={$_.Properties[6].Value}} |
+  Format-Table -AutoSize
+```
+
+![4769 event showing luca.moretti requesting svc-gestionale with RC4 from 10.10.10.100](../images/05-11-kerberoast-detection.png)
+
+One row tells the whole story: **`luca.moretti`** requested a ticket for
+**`svc-gestionale`**, with encryption type **`23` (RC4)**, from
+**`10.10.10.100`**.
+
+### Takeaways
+
+- **Password spraying** defeats lockout by trying one password across many
+  accounts; it is detectable as a burst of 4625 failures across *different*
+  accounts from a single source.
+- A single weak password is enough to gain a foothold — password quality and
+  user awareness matter more than any single control.
+- **Kerberoasting** lets any authenticated user extract a crackable service
+  credential; the cracking is offline and invisible to the defender.
+- The weakness that makes it practical is **RC4** encryption — enforcing **AES**
+  and using long, random, managed passwords (**gMSA**, 25+ characters) for
+  service accounts largely neutralizes the attack.
+- Detect Kerberoasting through **4769 events requesting RC4 tickets**, and limit
+  the blast radius by keeping service accounts out of privileged groups.
