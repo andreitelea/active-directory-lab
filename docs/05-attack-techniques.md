@@ -486,3 +486,111 @@ netexec's null-session checks.)
   local admin passwords) is the direct countermeasure.
 - Audit policy must be **verified on every host**: CLIENT01's missing
   process-creation auditing left the attacker's execution invisible locally.
+
+---
+
+## 5.4 Privilege escalation to the Domain Controller
+
+The final step turns control of one workstation into control of the whole
+domain. When the Domain Admin `adm.andre` logged on to CLIENT01 (to configure
+the service account), their domain credentials were cached in that machine's
+memory — and the attacker owns CLIENT01 as SYSTEM.
+
+### The attack chain breaks: endpoint protection
+
+The natural next move is to read the credentials from **LSASS**, the process
+that holds the identities of logged-on users. The attacker attempted exactly
+this from Kali:
+
+```bash
+nxc smb 10.10.10.20 -u svc-gestionale -p '<password>' -M lsassy
+```
+
+The command hung and returned nothing. **Windows Defender detected and blocked
+it.** Checking Defender's detections on CLIENT01 (`Get-MpThreatDetection`)
+revealed the reason:
+
+![Windows Defender detection of the comsvcs.dll LSASS dump attempt](../images/05-17-defender-block.png)
+
+The flagged resource is the command line
+`rundll32.exe comsvcs.dll, MiniDump ... full` — the well-known technique of
+abusing `comsvcs.dll` to snapshot LSASS memory. Defender's behavioral detection
+recognized it as credential theft and stopped it before any dump was written.
+
+**This is the key defensive result:** with a properly defended endpoint, the
+attack chain breaks here. The misconfigurations (a service account as local
+admin, a Domain Admin logging on to a workstation) created the opportunity, but
+endpoint protection denied the payoff. Defense in depth did its job.
+
+### Studying the final step: DCSync (detection focus)
+
+To learn how the final technique is **detected**, the scenario below *assumes*
+the attacker had succeeded in stealing a Domain Admin credential, and uses the
+`adm.andre` account directly. The objective is not the attack but the telemetry
+it produces.
+
+The technique is **DCSync**: holding Domain Admin rights, the attacker
+impersonates a Domain Controller and asks the real DC to *replicate* directory
+data — and the DC hands over the password hashes of the entire domain. No
+malware, no file dropped; it abuses a legitimate replication protocol, which is
+what makes it stealthy.
+
+```bash
+nxc smb 10.10.10.10 -u adm.andre -p '<password>' --ntds
+```
+
+![DCSync dumping all domain account hashes (hashes redacted)](../images/05-18-dcsync.png)
+
+Every account's hash is returned, including `krbtgt` — the key that signs all
+Kerberos tickets, and the basis of a *Golden Ticket* for persistent domain
+control. (Hashes are redacted in this write-up as a matter of practice.)
+
+A side observation visible in the dump: several users shared the **same hash**,
+meaning the same password — the users who never changed the shared temporary
+password from chapter 4. Identical hashes expose password reuse at a glance.
+
+### Detecting DCSync
+
+DCSync is **invisible by default**: directory replication is not audited on most
+installations. Detecting it is a deliberate choice — the subcategory must be
+enabled first on the DC:
+
+```powershell
+auditpol /set /subcategory:"Directory Service Access" /success:enable /failure:enable
+```
+
+With auditing on, the replication request is recorded as event **4662**. The
+detection logic is precise: replication is something **only Domain Controllers
+do with each other**. A 4662 that references the replication right
+`DS-Replication-Get-Changes-All` (GUID `1131f6ad-...`) performed by a normal
+**user** account is a DCSync — an attack. On DC01:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4662;StartTime=(Get-Date).AddMinutes(-15)} |
+  ?{ $_.Message -match '1131f6ad' } |
+  Select-Object TimeCreated, @{n='Account';e={$_.Properties[1].Value}} | ft -a
+```
+
+![4662 replication events performed by adm.andre — the DCSync signature](../images/05-19-dcsync-detection.png)
+
+The log shows `adm.andre` performing directory replication — a user account
+doing a Domain Controller's job. That is the signature a SOC analyst watches
+for.
+
+### Takeaways
+
+- **Endpoint protection is decisive.** Defender blocking the LSASS dump broke
+  the kill chain; Credential Guard and LSASS protection (RunAsPPL) make this
+  theft far harder.
+- **Protect privileged accounts from exposure.** A Domain Admin should never log
+  on to a workstation — tiered administration keeps high-value credentials off
+  low-trust machines. The whole escalation was only possible because a DA's
+  credentials ended up on a machine the attacker controlled.
+- **DCSync is stealthy by design** and invisible unless **Directory Service
+  Access auditing** is enabled — a detection-engineering decision that must be
+  made in advance.
+- **Alert on replication by non-DC principals**: a 4662 with
+  `DS-Replication-Get-Changes-All` from any account that is not a Domain
+  Controller is high-confidence malicious.
+- **Incident response:** if `krbtgt` is exposed, its password must be reset
+  **twice** to fully invalidate forged (Golden) tickets.

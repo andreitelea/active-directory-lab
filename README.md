@@ -57,7 +57,7 @@ Host: Intel i7-12700K, 32 GB RAM, Windows 11 Pro + Hyper-V.
 - [x] Domain structure: OUs, security groups, user accounts (least privilege)
 - [x] Domain-joined client and verified domain logon
 - [x] Security logging baseline: advanced audit policy via GPO
-- [ ] Attack techniques simulation (reconnaissance, credential attacks, lateral movement)
+- [x] Attack techniques simulation (reconnaissance, credential attacks, lateral movement, escalation)
 - [ ] Hardening
 - [ ] Detection & monitoring
 
@@ -74,7 +74,7 @@ The full step-by-step write-up lives in [`docs/`](docs/):
 2. [Lab architecture](docs/02-lab-architecture.md)
 3. [Domain Controller build](docs/03-domain-controller.md)
 4. [Domain structure & accounts](docs/04-domain-structure.md)
-5. Attack techniques simulation *(in progress)*
+5. [Attack techniques simulation](docs/05-attack-techniques.md)
 6. Hardening *(in progress)*
 7. Detection & logging *(in progress)*
 8. Lessons learned *(in progress)*
